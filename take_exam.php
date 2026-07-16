@@ -67,15 +67,73 @@ if ($existingAttempt) {
        Professional Tip: If you have a 'period' column in your questions table, 
        add "AND period = '{$exam['description']}'" to the WHERE clause.
     */
-    // Group by question_text to ensure unique questions even if they are duplicated in the database
-    $qstmt = $conn->prepare("SELECT MIN(id) as id FROM questions WHERE exam_id = ? GROUP BY question_text ORDER BY RAND() LIMIT 50");
-    $qstmt->bind_param("i", $exam_id);
-    $qstmt->execute();
-    $q_res = $qstmt->get_result();
-    
+    // Gather all question IDs previously selected in other attempts of this student for this exam
+    $prev_selected_ids = [];
+    $stmtPrev = $conn->prepare("SELECT selected_question_ids FROM attempts WHERE exam_id = ? AND student_id = ?");
+    $stmtPrev->bind_param("ii", $exam_id, $student_id);
+    $stmtPrev->execute();
+    $resPrev = $stmtPrev->get_result();
+    while ($rowPrev = $resPrev->fetch_assoc()) {
+        $ids = json_decode($rowPrev['selected_question_ids'], true);
+        if (is_array($ids)) {
+            foreach ($ids as $id) {
+                $prev_selected_ids[] = (int)$id;
+            }
+        }
+    }
+    $prev_selected_ids = array_unique($prev_selected_ids);
+
+    // Get the question_text of those previously selected questions to avoid any duplicate matching text
+    $prev_question_texts = [];
+    if (!empty($prev_selected_ids)) {
+        $placeholders = implode(',', array_fill(0, count($prev_selected_ids), '?'));
+        $textStmt = $conn->prepare("SELECT question_text FROM questions WHERE id IN ($placeholders)");
+        $textStmt->bind_param(str_repeat('i', count($prev_selected_ids)), ...$prev_selected_ids);
+        $textStmt->execute();
+        $resTexts = $textStmt->get_result();
+        while ($rowText = $resTexts->fetch_assoc()) {
+            $prev_question_texts[] = $rowText['question_text'];
+        }
+        $prev_question_texts = array_unique($prev_question_texts);
+    }
+
     $question_ids = [];
-    while($row = $q_res->fetch_assoc()) {
-        $question_ids[] = (int)$row['id'];
+
+    if (!empty($prev_question_texts)) {
+        // Step 1: Select questions that have NOT been selected before (by matching question_text)
+        $placeholders = implode(',', array_fill(0, count($prev_question_texts), '?'));
+        $qstmt = $conn->prepare("SELECT MIN(id) as id FROM questions WHERE exam_id = ? AND question_text NOT IN ($placeholders) GROUP BY question_text ORDER BY RAND() LIMIT 50");
+        $types = 'i' . str_repeat('s', count($prev_question_texts));
+        $params = array_merge([$exam_id], $prev_question_texts);
+        $qstmt->bind_param($types, ...$params);
+        $qstmt->execute();
+        $q_res = $qstmt->get_result();
+        while($row = $q_res->fetch_assoc()) {
+            $question_ids[] = (int)$row['id'];
+        }
+
+        // Step 2: If we don't have 50 questions, fill the rest from the already-selected ones
+        $needed = 50 - count($question_ids);
+        if ($needed > 0) {
+            $qstmt2 = $conn->prepare("SELECT MIN(id) as id FROM questions WHERE exam_id = ? AND question_text IN ($placeholders) GROUP BY question_text ORDER BY RAND() LIMIT ?");
+            $types2 = 'i' . str_repeat('s', count($prev_question_texts)) . 'i';
+            $params2 = array_merge([$exam_id], $prev_question_texts, [$needed]);
+            $qstmt2->bind_param($types2, ...$params2);
+            $qstmt2->execute();
+            $q_res2 = $qstmt2->get_result();
+            while($row = $q_res2->fetch_assoc()) {
+                $question_ids[] = (int)$row['id'];
+            }
+        }
+    } else {
+        // No previous attempts, just select 50 random unique questions
+        $qstmt = $conn->prepare("SELECT MIN(id) as id FROM questions WHERE exam_id = ? GROUP BY question_text ORDER BY RAND() LIMIT 50");
+        $qstmt->bind_param("i", $exam_id);
+        $qstmt->execute();
+        $q_res = $qstmt->get_result();
+        while($row = $q_res->fetch_assoc()) {
+            $question_ids[] = (int)$row['id'];
+        }
     }
     
     if (empty($question_ids)) {
