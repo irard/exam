@@ -231,36 +231,76 @@ const penaltyInMs = 10 * 60 * 1000;
 const storageKey = "exam_timer_<?= (int)$exam_id; ?>_<?= (int)$student_id; ?>";
 const penaltyLockKey = "penalty_applied_lock";
 
-let start = localStorage.getItem(storageKey);
-
-if (!start || start === "NaN") {
-    start = new Date().getTime();
-    localStorage.setItem(storageKey, start);
+let startVal = parseInt(localStorage.getItem(storageKey));
+if (isNaN(startVal) || startVal <= 0) {
+    startVal = new Date().getTime();
+    localStorage.setItem(storageKey, startVal);
 } else {
+    // Check if page was refreshed in a completely crash-free manner
+    let isPageRefresh = false;
+    try {
+        if (window.performance) {
+            if (performance.getEntriesByType) {
+                const navs = performance.getEntriesByType("navigation");
+                if (navs && navs[0] && navs[0].type === "reload") {
+                    isPageRefresh = true;
+                }
+            }
+            if (!isPageRefresh && performance.navigation && performance.navigation.type === 1) {
+                isPageRefresh = true;
+            }
+        }
+    } catch (e) {}
+
     const penaltyLocked = sessionStorage.getItem(penaltyLockKey);
-    if (performance.navigation.type === 1 && !penaltyLocked) {
-        start = parseInt(start) - penaltyInMs;
-        localStorage.setItem(storageKey, start);
-        alert("⚠️ REFRESH PENALTY: 10 minutes deducted.");
+    if (isPageRefresh && !penaltyLocked) {
+        startVal = startVal - penaltyInMs;
+        localStorage.setItem(storageKey, startVal);
+        // Note: Delay the alert slightly to prevent freezing rendering of the timer initially
+        setTimeout(function() {
+            alert("⚠️ REFRESH PENALTY: 10 minutes deducted.");
+        }, 100);
     }
     sessionStorage.removeItem(penaltyLockKey);
 }
 
-// Tab Switching / Visibility Penalty
+// Tab Switching & App Cover (Window Focus Loss) Penalty
+let lastPenaltyTime = 0; // Prevent duplicate penalties within 2 seconds
+function applyPenalty() {
+    const now = new Date().getTime();
+    if (now - lastPenaltyTime < 2000) {
+        return; // Prevent double trigger within same event sequence
+    }
+    lastPenaltyTime = now;
+
+    let currentStart = parseInt(localStorage.getItem(storageKey));
+    if (!isNaN(currentStart)) {
+        localStorage.setItem(storageKey, currentStart - penaltyInMs);
+        setTimeout(function() {
+            alert("⚠️ VIOLATION: You left the exam screen, switched tabs, or another app covered it! 10 minutes deducted.");
+        }, 100);
+    }
+}
+
 document.addEventListener("visibilitychange", function() {
     if (document.visibilityState === 'hidden') {
         sessionStorage.setItem(penaltyLockKey, "true");
-        let currentStart = parseInt(localStorage.getItem(storageKey));
-        localStorage.setItem(storageKey, currentStart - penaltyInMs);
-    } else if (document.visibilityState === 'visible') {
-        alert("⚠️ VIOLATION: You left the exam screen! 10 minutes deducted.");
-        location.reload(); 
+        applyPenalty();
     }
+});
+
+window.addEventListener("blur", function() {
+    sessionStorage.setItem(penaltyLockKey, "true");
+    applyPenalty();
 });
 
 const countdown = setInterval(function() {
     const now = new Date().getTime();
-    const currentStart = parseInt(localStorage.getItem(storageKey));
+    let currentStart = parseInt(localStorage.getItem(storageKey));
+    if (isNaN(currentStart) || currentStart <= 0) {
+        currentStart = now;
+        localStorage.setItem(storageKey, currentStart);
+    }
     const target = currentStart + durationInMs;
     const remaining = target - now;
     const timeToDisplay = Math.max(0, remaining);
