@@ -144,6 +144,13 @@ if (isset($_GET['toggle_exam'])) {
     header("Location: " . $_SERVER['PHP_SELF'] . "?tab=my-subjects"); 
     exit; 
 } 
+
+if (isset($_GET['toggle_retake'])) {
+    $id = (int)$_GET['toggle_retake'];
+    $conn->query("UPDATE exams SET allow_retake = 1 - allow_retake WHERE id = $id AND created_by = $teacher_id");
+    header("Location: " . $_SERVER['PHP_SELF'] . "?tab=my-subjects");
+    exit;
+}
  
 // Delete Resource Handler 
 if (isset($_GET['delete_img'])) { 
@@ -447,6 +454,7 @@ if (isset($_GET['delete_img'])) {
                             <th>Subject Name</th> 
                             <th>Category/Period</th> 
                             <th>Status</th> 
+                            <th>Retake Allowed</th>
                             <th>Action</th> 
                         </tr> 
                     </thead> 
@@ -458,7 +466,11 @@ if (isset($_GET['delete_img'])) {
                             <td><strong><?= htmlspecialchars($e['title']) ?></strong></td> 
                             <td><?= htmlspecialchars($e['description']) ?></td> 
                             <td><?= $e['is_active'] ? '<span style="color:green">Active</span>' : '<span style="color:gray">Hidden</span>' ?></td> 
-                            <td><a href="?toggle_exam=<?= $e['id'] ?>" class="teacher-dashboard-btn" style="background:#64748b; font-size:12px; padding:6px 12px;">Toggle</a></td> 
+                            <td><?= isset($e['allow_retake']) && $e['allow_retake'] ? '<span style="color:green">Yes</span>' : '<span style="color:red">No</span>' ?></td>
+                            <td>
+                                <a href="?toggle_exam=<?= $e['id'] ?>" class="teacher-dashboard-btn" style="background:#64748b; font-size:11px; padding:6px 10px; margin-right:5px; text-decoration:none;">Toggle Status</a>
+                                <a href="?toggle_retake=<?= $e['id'] ?>" class="teacher-dashboard-btn" style="background:#e67e22; font-size:11px; padding:6px 10px; text-decoration:none;">Toggle Retake</a>
+                            </td>
                         </tr> 
                         <?php endwhile; ?> 
                     </tbody> 

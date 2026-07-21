@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS exams (
   title VARCHAR(200) NOT NULL,
   description TEXT,
   is_active TINYINT(1) NOT NULL DEFAULT 0,
+  allow_retake TINYINT(1) NOT NULL DEFAULT 1,
   created_by INT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (created_by),

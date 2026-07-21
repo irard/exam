@@ -18,6 +18,17 @@ if ($exam_id <= 0) {
     die("Invalid Exam ID.");
 }
 
+// 2. ✅ Fetch Exam details
+$stmt = $conn->prepare("SELECT * FROM exams WHERE id = ?");
+$stmt->bind_param("i", $exam_id);
+$stmt->execute();
+$exam = $stmt->get_result()->fetch_assoc();
+
+if (!$exam || $exam['is_active'] == 0) {
+    echo "<script>alert('Exam unavailable.'); window.location.href='student_dashboard.php';</script>";
+    exit;
+}
+
 // 1. 🚫 Prevent re-entry (Allows only 1 Retake if Failed)
 $stmtCount = $conn->prepare("SELECT id, raw_score, max_score FROM attempts WHERE exam_id = ? AND student_id = ? AND submitted_at IS NOT NULL ORDER BY submitted_at DESC");
 $stmtCount->bind_param("ii", $exam_id, $student_id);
@@ -36,21 +47,15 @@ if ($attempts_count > 0) {
         exit;
     }
 
+    if (isset($exam['allow_retake']) && $exam['allow_retake'] == 0) {
+        echo "<script>alert('Retakes are disabled for this exam.'); window.location.href='student_dashboard.php';</script>";
+        exit;
+    }
+
     if ($attempts_count >= 2) {
         echo "<script>alert('You have already used your one allowed retake for this exam.'); window.location.href='student_dashboard.php';</script>";
         exit;
     }
-}
-
-// 2. ✅ Fetch Exam details
-$stmt = $conn->prepare("SELECT * FROM exams WHERE id = ?");
-$stmt->bind_param("i", $exam_id);
-$stmt->execute();
-$exam = $stmt->get_result()->fetch_assoc();
-
-if (!$exam || $exam['is_active'] == 0) {
-    echo "<script>alert('Exam unavailable.'); window.location.href='student_dashboard.php';</script>";
-    exit;
 }
 
 // 3. 🕒 Attempt & Unique Question Logic (Filtered by Period)

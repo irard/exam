@@ -69,7 +69,7 @@ $student_info = $stmt_info->get_result()->fetch_assoc();
 
 // Fetch Exams with Period (Description)
 $query = "
-    SELECT e.id AS exam_id, e.title, e.description AS period,
+    SELECT e.id AS exam_id, e.title, e.description AS period, e.allow_retake,
            a.id AS attempt_id,
            a.raw_score AS score,
            a.max_score,
@@ -179,7 +179,11 @@ IFERROR(INDEX($A$1:$I$100,MATCH($J$1,$B$1:$B$100,0),COLUMN(A1)),"Not Found"))</p
                                     <?php if (!$row['attempt_id']): ?>
                                         <a href="take_exam.php?exam_id=<?= $row['exam_id']; ?>" class="badge badge-success">Take Exam</a>
                                     <?php elseif ($is_failed): ?>
-                                        <a href="take_exam.php?exam_id=<?= $row['exam_id']; ?>" class="badge" style="background:#e67e22; color:white;">Retake</a>
+                                        <?php if (isset($row['allow_retake']) && $row['allow_retake']): ?>
+                                            <a href="take_exam.php?exam_id=<?= $row['exam_id']; ?>" class="badge" style="background:#e67e22; color:white;">Retake</a>
+                                        <?php else: ?>
+                                            <span class="badge" style="background:#e74c3c; color:white;">Failed (Retake Disabled)</span>
+                                        <?php endif; ?>
                                     <?php else: ?>
                                         <span class="badge" style="background:#bdc3c7; color:white;">Passed</span>
                                     <?php endif; ?>
