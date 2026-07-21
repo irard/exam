@@ -67,9 +67,23 @@ $stmt_info->bind_param('i', $user_id);
 $stmt_info->execute();
 $student_info = $stmt_info->get_result()->fetch_assoc();
 
+// Ensure the allow_retake column exists on the exams table (dynamic recovery in case db.php load order or permission deferred it)
+$has_allow_retake = false;
+$check_col = $conn->query("SHOW COLUMNS FROM `exams` LIKE 'allow_retake'");
+if ($check_col && $check_col->num_rows > 0) {
+    $has_allow_retake = true;
+} else {
+    // Attempt to add it on the fly
+    if ($conn->query("ALTER TABLE `exams` ADD `allow_retake` TINYINT(1) NOT NULL DEFAULT 1")) {
+        $has_allow_retake = true;
+    }
+}
+
+$allow_retake_select = $has_allow_retake ? "e.allow_retake" : "1 AS allow_retake";
+
 // Fetch Exams with Period (Description)
 $query = "
-    SELECT e.id AS exam_id, e.title, e.description AS period, e.allow_retake,
+    SELECT e.id AS exam_id, e.title, e.description AS period, $allow_retake_select,
            a.id AS attempt_id,
            a.raw_score AS score,
            a.max_score,
@@ -88,6 +102,28 @@ $query = "
 ";
 
 $stmt = $conn->prepare($query);
+if (!$stmt) {
+    // If somehow it still failed, log or fallback to a query without allow_retake
+    $query_fallback = "
+        SELECT e.id AS exam_id, e.title, e.description AS period, 1 AS allow_retake,
+               a.id AS attempt_id,
+               a.raw_score AS score,
+               a.max_score,
+               a.submitted_at AS last_submission
+        FROM exams e
+        LEFT JOIN attempts a
+          ON e.id = a.exam_id
+          AND a.student_id = ?
+          AND a.id = (
+               SELECT id FROM attempts
+               WHERE exam_id = e.id AND student_id = ?
+               ORDER BY submitted_at DESC LIMIT 1
+          )
+        WHERE e.is_active = 1
+        ORDER BY e.id DESC
+    ";
+    $stmt = $conn->prepare($query_fallback);
+}
 $stmt->bind_param('ii', $user_id, $user_id);
 $stmt->execute();
 $result = $stmt->get_result();
