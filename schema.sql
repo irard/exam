@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS attempts (
   raw_score INT DEFAULT NULL,
   transmuted INT DEFAULT NULL,
   needs_manual_grading TINYINT(1) DEFAULT 0,
+  time_adjustment INT NOT NULL DEFAULT 0,
   started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   submitted_at TIMESTAMP NULL DEFAULT NULL,
   INDEX (exam_id),

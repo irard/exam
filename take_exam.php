@@ -11,6 +11,24 @@ require_role('student');
 $student_id = $_SESSION['user']['id'];
 $exam_id = (int)($_GET['exam_id'] ?? 0);
 
+// --- AJAX TIME ADJUSTMENT HANDLER ---
+if (isset($_GET['action']) && $_GET['action'] === 'get_adjustment') {
+    $attempt_id = (int)($_GET['attempt_id'] ?? 0);
+    $response = ['time_adjustment' => 0];
+
+    $stmtAdj = $conn->prepare("SELECT time_adjustment FROM attempts WHERE id = ? AND student_id = ? AND submitted_at IS NULL");
+    $stmtAdj->bind_param("ii", $attempt_id, $student_id);
+    $stmtAdj->execute();
+    $resAdj = $stmtAdj->get_result()->fetch_assoc();
+    if ($resAdj) {
+        $response['time_adjustment'] = (int)$resAdj['time_adjustment'];
+    }
+
+    header('Content-Type: application/json');
+    echo json_encode($response);
+    exit;
+}
+
 // --- SET YOUR TIME LIMIT HERE (in minutes) ---
 $duration_minutes = 60; 
 
@@ -333,6 +351,45 @@ function confirmSubmission() {
     }
     return false;
 }
+
+// Time adjustment polling from the teacher in real-time
+let appliedAdjustment = 0; // Cumulative adjustment in milliseconds already applied locally
+const attemptId = <?= (int)$new_attempt_id; ?>;
+
+function checkTimeAdjustment() {
+    fetch("take_exam.php?action=get_adjustment&attempt_id=" + attemptId)
+        .then(response => response.json())
+        .then(data => {
+            if (data && typeof data.time_adjustment !== 'undefined') {
+                const latestAdjustmentMs = data.time_adjustment * 1000; // Convert seconds from DB to ms
+                if (latestAdjustmentMs !== appliedAdjustment) {
+                    const diff = latestAdjustmentMs - appliedAdjustment;
+
+                    // Adjust startVal in localStorage
+                    let currentStart = parseInt(localStorage.getItem(storageKey));
+                    if (!isNaN(currentStart)) {
+                        localStorage.setItem(storageKey, currentStart + diff);
+                    }
+
+                    appliedAdjustment = latestAdjustmentMs;
+
+                    // Notify student of change (ignoring the initial 0-value load)
+                    const diffMins = Math.round(diff / 60000);
+                    if (diffMins !== 0) {
+                        const word = diffMins > 0 ? "added" : "deducted";
+                        const absMins = Math.abs(diffMins);
+                        alert("⏱️ TIMER UPDATE: The teacher has " + word + " " + absMins + " minute(s) to your exam timer.");
+                    }
+                }
+            }
+        })
+        .catch(err => console.error("Error checking time adjustment:", err));
+}
+
+// Poll every 5 seconds
+setInterval(checkTimeAdjustment, 5000);
+// Also run once immediately on load
+checkTimeAdjustment();
 
 window.onbeforeunload = function() { return "Warning: Progress may be lost if you leave this page."; };
 </script>
