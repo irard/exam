@@ -245,71 +245,23 @@ include 'header.php';
 <script>
 // Timer Logic
 const durationInMs = <?= (int)$duration_minutes; ?> * 60 * 1000;
-const penaltyInMs = 10 * 60 * 1000; 
 const storageKey = "exam_timer_<?= (int)$exam_id; ?>_<?= (int)$student_id; ?>";
-const penaltyLockKey = "penalty_applied_lock";
 
 let startVal = parseInt(localStorage.getItem(storageKey));
 if (isNaN(startVal) || startVal <= 0) {
     startVal = new Date().getTime();
     localStorage.setItem(storageKey, startVal);
-} else {
-    // Check if page was refreshed in a completely crash-free manner
-    let isPageRefresh = false;
-    try {
-        if (window.performance) {
-            if (performance.getEntriesByType) {
-                const navs = performance.getEntriesByType("navigation");
-                if (navs && navs[0] && navs[0].type === "reload") {
-                    isPageRefresh = true;
-                }
-            }
-            if (!isPageRefresh && performance.navigation && performance.navigation.type === 1) {
-                isPageRefresh = true;
-            }
-        }
-    } catch (e) {}
-
-    const penaltyLocked = sessionStorage.getItem(penaltyLockKey);
-    if (isPageRefresh && !penaltyLocked) {
-        startVal = startVal - penaltyInMs;
-        localStorage.setItem(storageKey, startVal);
-        // Note: Delay the alert slightly to prevent freezing rendering of the timer initially
-        setTimeout(function() {
-            alert("⚠️ REFRESH PENALTY: 10 minutes deducted.");
-        }, 100);
-    }
-    sessionStorage.removeItem(penaltyLockKey);
 }
 
-// Tab Switching & App Cover (Window Focus Loss) Penalty
-let lastPenaltyTime = 0; // Prevent duplicate penalties within 2 seconds
-function applyPenalty() {
-    const now = new Date().getTime();
-    if (now - lastPenaltyTime < 2000) {
-        return; // Prevent double trigger within same event sequence
-    }
-    lastPenaltyTime = now;
-
-    let currentStart = parseInt(localStorage.getItem(storageKey));
-    if (!isNaN(currentStart)) {
-        localStorage.setItem(storageKey, currentStart - penaltyInMs);
-        setTimeout(function() {
-            alert("⚠️ VIOLATION: You left the exam screen, switched tabs, or another app covered it! 10 minutes deducted.");
-        }, 100);
-    }
-}
-
+// Warnings without automatic time deduction
 document.addEventListener("visibilitychange", function() {
     if (document.visibilityState === 'hidden') {
-        sessionStorage.setItem(penaltyLockKey, "true");
-        applyPenalty();
+        console.warn("⚠️ VIOLATION: Student left the exam screen or switched tabs.");
     }
 });
 
 window.addEventListener("blur", function() {
-    sessionStorage.setItem(penaltyLockKey, "true");
-    applyPenalty();
+    console.warn("⚠️ VIOLATION: Student window de-focused or covered.");
 });
 
 const countdown = setInterval(function() {
