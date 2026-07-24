@@ -90,7 +90,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // 4. Finalize transaction
                 if ($success_flag) {
                     $conn->commit();
-                    $success = "Registration successful! You can now login.";
+                    $success = "Registration successful! Redirecting...";
+                    redirect('login.php?registered=1');
                 } else {
                     $conn->rollback();
                     // Use a generic error message for security, logging the database error separately if needed

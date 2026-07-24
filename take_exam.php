@@ -11,11 +11,40 @@ require_role('student');
 $student_id = $_SESSION['user']['id'];
 $exam_id = (int)($_GET['exam_id'] ?? 0);
 
+// --- AJAX TIME ADJUSTMENT HANDLER ---
+if (isset($_GET['action']) && $_GET['action'] === 'get_adjustment') {
+    $attempt_id = (int)($_GET['attempt_id'] ?? 0);
+    $response = ['time_adjustment' => 0];
+
+    $stmtAdj = $conn->prepare("SELECT time_adjustment FROM attempts WHERE id = ? AND student_id = ? AND submitted_at IS NULL");
+    $stmtAdj->bind_param("ii", $attempt_id, $student_id);
+    $stmtAdj->execute();
+    $resAdj = $stmtAdj->get_result()->fetch_assoc();
+    if ($resAdj) {
+        $response['time_adjustment'] = (int)$resAdj['time_adjustment'];
+    }
+
+    header('Content-Type: application/json');
+    echo json_encode($response);
+    exit;
+}
+
 // --- SET YOUR TIME LIMIT HERE (in minutes) ---
 $duration_minutes = 60; 
 
 if ($exam_id <= 0) {
     die("Invalid Exam ID.");
+}
+
+// 2. ✅ Fetch Exam details
+$stmt = $conn->prepare("SELECT * FROM exams WHERE id = ?");
+$stmt->bind_param("i", $exam_id);
+$stmt->execute();
+$exam = $stmt->get_result()->fetch_assoc();
+
+if (!$exam || $exam['is_active'] == 0) {
+    echo "<script>alert('Exam unavailable.'); window.location.href='student_dashboard.php';</script>";
+    exit;
 }
 
 // 1. 🚫 Prevent re-entry (Allows only 1 Retake if Failed)
@@ -36,21 +65,15 @@ if ($attempts_count > 0) {
         exit;
     }
 
+    if (isset($exam['allow_retake']) && $exam['allow_retake'] == 0) {
+        echo "<script>alert('Retakes are disabled for this exam.'); window.location.href='student_dashboard.php';</script>";
+        exit;
+    }
+
     if ($attempts_count >= 2) {
         echo "<script>alert('You have already used your one allowed retake for this exam.'); window.location.href='student_dashboard.php';</script>";
         exit;
     }
-}
-
-// 2. ✅ Fetch Exam details
-$stmt = $conn->prepare("SELECT * FROM exams WHERE id = ?");
-$stmt->bind_param("i", $exam_id);
-$stmt->execute();
-$exam = $stmt->get_result()->fetch_assoc();
-
-if (!$exam || $exam['is_active'] == 0) {
-    echo "<script>alert('Exam unavailable.'); window.location.href='student_dashboard.php';</script>";
-    exit;
 }
 
 // 3. 🕒 Attempt & Unique Question Logic (Filtered by Period)
@@ -67,15 +90,73 @@ if ($existingAttempt) {
        Professional Tip: If you have a 'period' column in your questions table, 
        add "AND period = '{$exam['description']}'" to the WHERE clause.
     */
-    // Group by question_text to ensure unique questions even if they are duplicated in the database
-    $qstmt = $conn->prepare("SELECT MIN(id) as id FROM questions WHERE exam_id = ? GROUP BY question_text ORDER BY RAND() LIMIT 50");
-    $qstmt->bind_param("i", $exam_id);
-    $qstmt->execute();
-    $q_res = $qstmt->get_result();
-    
+    // Gather all question IDs previously selected in other attempts of this student for this exam
+    $prev_selected_ids = [];
+    $stmtPrev = $conn->prepare("SELECT selected_question_ids FROM attempts WHERE exam_id = ? AND student_id = ?");
+    $stmtPrev->bind_param("ii", $exam_id, $student_id);
+    $stmtPrev->execute();
+    $resPrev = $stmtPrev->get_result();
+    while ($rowPrev = $resPrev->fetch_assoc()) {
+        $ids = json_decode($rowPrev['selected_question_ids'], true);
+        if (is_array($ids)) {
+            foreach ($ids as $id) {
+                $prev_selected_ids[] = (int)$id;
+            }
+        }
+    }
+    $prev_selected_ids = array_unique($prev_selected_ids);
+
+    // Get the question_text of those previously selected questions to avoid any duplicate matching text
+    $prev_question_texts = [];
+    if (!empty($prev_selected_ids)) {
+        $placeholders = implode(',', array_fill(0, count($prev_selected_ids), '?'));
+        $textStmt = $conn->prepare("SELECT question_text FROM questions WHERE id IN ($placeholders)");
+        $textStmt->bind_param(str_repeat('i', count($prev_selected_ids)), ...$prev_selected_ids);
+        $textStmt->execute();
+        $resTexts = $textStmt->get_result();
+        while ($rowText = $resTexts->fetch_assoc()) {
+            $prev_question_texts[] = $rowText['question_text'];
+        }
+        $prev_question_texts = array_unique($prev_question_texts);
+    }
+
     $question_ids = [];
-    while($row = $q_res->fetch_assoc()) {
-        $question_ids[] = (int)$row['id'];
+
+    if (!empty($prev_question_texts)) {
+        // Step 1: Select questions that have NOT been selected before (by matching question_text)
+        $placeholders = implode(',', array_fill(0, count($prev_question_texts), '?'));
+        $qstmt = $conn->prepare("SELECT MIN(id) as id FROM questions WHERE exam_id = ? AND question_text NOT IN ($placeholders) GROUP BY question_text ORDER BY RAND() LIMIT 50");
+        $types = 'i' . str_repeat('s', count($prev_question_texts));
+        $params = array_merge([$exam_id], $prev_question_texts);
+        $qstmt->bind_param($types, ...$params);
+        $qstmt->execute();
+        $q_res = $qstmt->get_result();
+        while($row = $q_res->fetch_assoc()) {
+            $question_ids[] = (int)$row['id'];
+        }
+
+        // Step 2: If we don't have 50 questions, fill the rest from the already-selected ones
+        $needed = 50 - count($question_ids);
+        if ($needed > 0) {
+            $qstmt2 = $conn->prepare("SELECT MIN(id) as id FROM questions WHERE exam_id = ? AND question_text IN ($placeholders) GROUP BY question_text ORDER BY RAND() LIMIT ?");
+            $types2 = 'i' . str_repeat('s', count($prev_question_texts)) . 'i';
+            $params2 = array_merge([$exam_id], $prev_question_texts, [$needed]);
+            $qstmt2->bind_param($types2, ...$params2);
+            $qstmt2->execute();
+            $q_res2 = $qstmt2->get_result();
+            while($row = $q_res2->fetch_assoc()) {
+                $question_ids[] = (int)$row['id'];
+            }
+        }
+    } else {
+        // No previous attempts, just select 50 random unique questions
+        $qstmt = $conn->prepare("SELECT MIN(id) as id FROM questions WHERE exam_id = ? GROUP BY question_text ORDER BY RAND() LIMIT 50");
+        $qstmt->bind_param("i", $exam_id);
+        $qstmt->execute();
+        $q_res = $qstmt->get_result();
+        while($row = $q_res->fetch_assoc()) {
+            $question_ids[] = (int)$row['id'];
+        }
     }
     
     if (empty($question_ids)) {
@@ -164,40 +245,50 @@ include 'header.php';
 <script>
 // Timer Logic
 const durationInMs = <?= (int)$duration_minutes; ?> * 60 * 1000;
-const penaltyInMs = 10 * 60 * 1000; 
+const penaltyInMs = 10 * 60 * 1000; // 10 minutes penalty
 const storageKey = "exam_timer_<?= (int)$exam_id; ?>_<?= (int)$student_id; ?>";
-const penaltyLockKey = "penalty_applied_lock";
 
-let start = localStorage.getItem(storageKey);
-
-if (!start || start === "NaN") {
-    start = new Date().getTime();
-    localStorage.setItem(storageKey, start);
-} else {
-    const penaltyLocked = sessionStorage.getItem(penaltyLockKey);
-    if (performance.navigation.type === 1 && !penaltyLocked) {
-        start = parseInt(start) - penaltyInMs;
-        localStorage.setItem(storageKey, start);
-        alert("⚠️ REFRESH PENALTY: 10 minutes deducted.");
-    }
-    sessionStorage.removeItem(penaltyLockKey);
+let startVal = parseInt(localStorage.getItem(storageKey));
+if (isNaN(startVal) || startVal <= 0) {
+    startVal = new Date().getTime();
+    localStorage.setItem(storageKey, startVal);
 }
 
-// Tab Switching / Visibility Penalty
+// Tab Switching & App Cover (Window Focus Loss) Penalty - Deducts 10 mins automatically
+let lastPenaltyTime = 0; // Prevent duplicate penalties within 2 seconds
+function applyPenalty() {
+    const now = new Date().getTime();
+    if (now - lastPenaltyTime < 2000) {
+        return; // Prevent double trigger within same event sequence
+    }
+    lastPenaltyTime = now;
+
+    let currentStart = parseInt(localStorage.getItem(storageKey));
+    if (!isNaN(currentStart)) {
+        localStorage.setItem(storageKey, currentStart - penaltyInMs);
+        setTimeout(function() {
+            alert("⚠️ VIOLATION: You left the exam screen, switched tabs, or another app covered it! 10 minutes deducted.");
+        }, 100);
+    }
+}
+
 document.addEventListener("visibilitychange", function() {
     if (document.visibilityState === 'hidden') {
-        sessionStorage.setItem(penaltyLockKey, "true");
-        let currentStart = parseInt(localStorage.getItem(storageKey));
-        localStorage.setItem(storageKey, currentStart - penaltyInMs);
-    } else if (document.visibilityState === 'visible') {
-        alert("⚠️ VIOLATION: You left the exam screen! 10 minutes deducted.");
-        location.reload(); 
+        applyPenalty();
     }
+});
+
+window.addEventListener("blur", function() {
+    applyPenalty();
 });
 
 const countdown = setInterval(function() {
     const now = new Date().getTime();
-    const currentStart = parseInt(localStorage.getItem(storageKey));
+    let currentStart = parseInt(localStorage.getItem(storageKey));
+    if (isNaN(currentStart) || currentStart <= 0) {
+        currentStart = now;
+        localStorage.setItem(storageKey, currentStart);
+    }
     const target = currentStart + durationInMs;
     const remaining = target - now;
     const timeToDisplay = Math.max(0, remaining);
@@ -230,6 +321,45 @@ function confirmSubmission() {
     }
     return false;
 }
+
+// Time adjustment polling from the teacher in real-time
+let appliedAdjustment = 0; // Cumulative adjustment in milliseconds already applied locally
+const attemptId = <?= (int)$new_attempt_id; ?>;
+
+function checkTimeAdjustment() {
+    fetch("take_exam.php?action=get_adjustment&attempt_id=" + attemptId)
+        .then(response => response.json())
+        .then(data => {
+            if (data && typeof data.time_adjustment !== 'undefined') {
+                const latestAdjustmentMs = data.time_adjustment * 1000; // Convert seconds from DB to ms
+                if (latestAdjustmentMs !== appliedAdjustment) {
+                    const diff = latestAdjustmentMs - appliedAdjustment;
+
+                    // Adjust startVal in localStorage
+                    let currentStart = parseInt(localStorage.getItem(storageKey));
+                    if (!isNaN(currentStart)) {
+                        localStorage.setItem(storageKey, currentStart + diff);
+                    }
+
+                    appliedAdjustment = latestAdjustmentMs;
+
+                    // Notify student of change (ignoring the initial 0-value load)
+                    const diffMins = Math.round(diff / 60000);
+                    if (diffMins !== 0) {
+                        const word = diffMins > 0 ? "added" : "deducted";
+                        const absMins = Math.abs(diffMins);
+                        alert("⏱️ TIMER UPDATE: The teacher has " + word + " " + absMins + " minute(s) to your exam timer.");
+                    }
+                }
+            }
+        })
+        .catch(err => console.error("Error checking time adjustment:", err));
+}
+
+// Poll every 5 seconds
+setInterval(checkTimeAdjustment, 5000);
+// Also run once immediately on load
+checkTimeAdjustment();
 
 window.onbeforeunload = function() { return "Warning: Progress may be lost if you leave this page."; };
 </script>

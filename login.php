@@ -7,6 +7,10 @@ include 'header.php';
     <h2>Welcome Back</h2>
     <p>Sign in to continue</p>
 
+    <?php if(isset($_GET['registered'])): ?>
+      <div class="alert alert-success" style="background:#d4edda; color:#155724; border:1px solid #c3e6cb; padding:12px; border-radius:6px; margin-bottom:15px;">Registration successful! You can now login.</div>
+    <?php endif; ?>
+
     <?php if(!empty($error)): ?>
       <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
     <?php endif; ?>

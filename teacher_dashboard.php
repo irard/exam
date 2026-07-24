@@ -144,6 +144,31 @@ if (isset($_GET['toggle_exam'])) {
     header("Location: " . $_SERVER['PHP_SELF'] . "?tab=my-subjects"); 
     exit; 
 } 
+
+if (isset($_GET['adjust_time'])) {
+    $attempt_id = (int)$_GET['attempt_id'];
+    $minutes = (int)$_GET['minutes']; // Can be positive or negative
+
+    // Check if the exam belongs to this teacher to be secure!
+    $stmtCheck = $conn->prepare("SELECT a.id FROM attempts a JOIN exams e ON a.exam_id = e.id WHERE a.id = ? AND e.created_by = ?");
+    $stmtCheck->bind_param("ii", $attempt_id, $teacher_id);
+    $stmtCheck->execute();
+    if ($stmtCheck->get_result()->num_rows > 0) {
+        // Enforce the dynamic time_adjustment column existence check just in case
+        $conn->query("UPDATE attempts SET time_adjustment = time_adjustment + ($minutes * 60) WHERE id = $attempt_id");
+        $_SESSION['teacher_msg'] = "⏱️ Time adjusted by $minutes minutes!";
+        $_SESSION['teacher_msg_type'] = "success";
+    }
+    header("Location: " . $_SERVER['PHP_SELF'] . "?tab=ongoing-exams");
+    exit;
+}
+
+if (isset($_GET['toggle_retake'])) {
+    $id = (int)$_GET['toggle_retake'];
+    $conn->query("UPDATE exams SET allow_retake = 1 - allow_retake WHERE id = $id AND created_by = $teacher_id");
+    header("Location: " . $_SERVER['PHP_SELF'] . "?tab=my-subjects");
+    exit;
+}
  
 // Delete Resource Handler 
 if (isset($_GET['delete_img'])) { 
@@ -413,6 +438,7 @@ if (isset($_GET['delete_img'])) {
     <div style="flex: 1; padding: 20px 0;"> 
         <button class="teacher-dashboard-nav-item tab-trigger" data-tab-target="my-subjects">📚 My Subjects</button> 
         <button class="teacher-dashboard-nav-item tab-trigger" data-tab-target="student-results">📊 Exam Results</button> 
+        <button class="teacher-dashboard-nav-item tab-trigger" data-tab-target="ongoing-exams">⏱️ Ongoing Exams</button>
          
         <button class="teacher-dashboard-nav-item" id="tdManageToggle">⚙️ Question Bank ▼</button> 
         <div class="teacher-dashboard-sub-nav" id="tdManageMenu"> 
@@ -447,6 +473,7 @@ if (isset($_GET['delete_img'])) {
                             <th>Subject Name</th> 
                             <th>Category/Period</th> 
                             <th>Status</th> 
+                            <th>Retake Allowed</th>
                             <th>Action</th> 
                         </tr> 
                     </thead> 
@@ -458,7 +485,11 @@ if (isset($_GET['delete_img'])) {
                             <td><strong><?= htmlspecialchars($e['title']) ?></strong></td> 
                             <td><?= htmlspecialchars($e['description']) ?></td> 
                             <td><?= $e['is_active'] ? '<span style="color:green">Active</span>' : '<span style="color:gray">Hidden</span>' ?></td> 
-                            <td><a href="?toggle_exam=<?= $e['id'] ?>" class="teacher-dashboard-btn" style="background:#64748b; font-size:12px; padding:6px 12px;">Toggle</a></td> 
+                            <td><?= isset($e['allow_retake']) && $e['allow_retake'] ? '<span style="color:green">Yes</span>' : '<span style="color:red">No</span>' ?></td>
+                            <td>
+                                <a href="?toggle_exam=<?= $e['id'] ?>" class="teacher-dashboard-btn" style="background:#64748b; font-size:11px; padding:6px 10px; margin-right:5px; text-decoration:none;">Toggle Status</a>
+                                <a href="?toggle_retake=<?= $e['id'] ?>" class="teacher-dashboard-btn" style="background:#e67e22; font-size:11px; padding:6px 10px; text-decoration:none;">Toggle Retake</a>
+                            </td>
                         </tr> 
                         <?php endwhile; ?> 
                     </tbody> 
@@ -563,6 +594,53 @@ if (isset($_GET['delete_img'])) {
  
         </div> 
     </div> 
+
+    <div id="ongoing-exams" class="tab-content">
+        <div class="teacher-dashboard-card">
+            <h3>Ongoing & Active Student Exams</h3>
+            <p style="margin-bottom:20px; color:#64748b; font-size:14px;">Monitor active exam attempts currently in progress and adjust their remaining time.</p>
+            <div class="teacher-dashboard-table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Student</th>
+                            <th>Course/Section</th>
+                            <th>Subject</th>
+                            <th>Started At</th>
+                            <th>Adjustment</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php
+                        $ongoing = $conn->query("SELECT a.id as attempt_id, CONCAT(s.first_name,' ',s.last_name) as name, s.course, s.year_section, e.title, a.started_at, a.time_adjustment
+                            FROM attempts a JOIN exams e ON a.exam_id = e.id JOIN students s ON a.student_id = s.user_id
+                            WHERE a.submitted_at IS NULL AND e.created_by = $teacher_id ORDER BY a.started_at DESC");
+
+                        if($ongoing && $ongoing->num_rows > 0):
+                            while($o = $ongoing->fetch_assoc()):
+                                $current_adj_mins = round($o['time_adjustment'] / 60);
+                                $adj_text = $current_adj_mins >= 0 ? "+$current_adj_mins mins" : "$current_adj_mins mins";
+                            ?>
+                            <tr>
+                                <td><strong><?= htmlspecialchars($o['name']) ?></strong></td>
+                                <td><?= htmlspecialchars($o['course']) ?> - <?= htmlspecialchars($o['year_section']) ?></td>
+                                <td><?= htmlspecialchars($o['title']) ?></td>
+                                <td><?= date('M d, H:i', strtotime($o['started_at'])) ?></td>
+                                <td><span class="badge" style="background:#3b82f6; color:white; font-weight:bold; padding:4px 8px; border-radius:4px;"><?= $adj_text ?></span></td>
+                                <td>
+                                    <a href="?adjust_time=true&attempt_id=<?= $o['attempt_id'] ?>&minutes=5" class="teacher-dashboard-btn" style="background:#27ae60; font-size:12px; padding:6px 10px; margin-right:5px; text-decoration:none;">+5 Mins</a>
+                                    <a href="?adjust_time=true&attempt_id=<?= $o['attempt_id'] ?>&minutes=-5" class="teacher-dashboard-btn" style="background:#e74c3c; font-size:12px; padding:6px 10px; text-decoration:none;">-5 Mins</a>
+                                </td>
+                            </tr>
+                        <?php endwhile; else: ?>
+                            <tr><td colspan="6" style="text-align:center; padding:40px; color:var(--td-gray);">No ongoing student exams found at the moment.</td></tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
  
     <div id="add-question" class="tab-content"> 
         <div class="teacher-dashboard-card" style="max-width: 700px;"> 
